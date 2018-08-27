@@ -1,4 +1,45 @@
-AES-GCM加密算法有加密和解密两种操作，对应的输入输出分别为：加密解密输入Key、IV、明文plaintext、附加验证数据AADKey、IV、密文ciphertext、验证标签T 、附加验证数据AAD输出密文ciphertext、验证标签T明文plaintext对比加解密需要的参数，再结合mmtls协议，所以要保证服务端可以解密，客户端的请求中应该包括密文ciphertext、验证标签T 、附加验证数据AAD（K和IV都由服务端根据SS==ES 扩展生成），每次短链接的请求数据中有三次aes-gcm加密我们以请求第二部分数据即第一次加密为例：000000a0                    19 f1 03 00 24 2f 68 f6 e0 08  .*.O.>....$/h...000000b0  01 20 61 0a 41 1f 40 b1 3a ca 7b 4a c9 76 fb b5  . a.A.@.:.{J.v..000000c0  28 76 84 12 c5 16 29 7c 97 ee c3 eb 05 a9 01     (v....)|........这次aes的加密中蓝色部分为密文，绿色部分为验证标签，附加验证数据AAD为红色协议头部分，实际的值应为：============================ CRYPTO_gcm128_aad_C91DE: 0xaece7400 ,0x994f6d60 ,0xd ====Data dump add:0x994f6d60 :           0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F  0123456789ABCDEF00000000  00 00 00 00 00 00 00 01 19 f1 03 00 24           ............$============================ CRYPTO_gcm128_aad_C91DE End=============================微信中gcm加密函数分析,微信中key的长度为0x10， iv长度0xc，附加验证数据aad长度0xd：官方：virtual int mmtls::AesGcmCrypter::Crypt(const byte* iv, size_t iv_len, const byte* aad, size_t aad_len, const byte* input, size_t input_size, mmtls::String& out)实际：signed int __fastcall mmtls::AesGcmCrypter::Crypt_51210(int a1, int nonce, int nonce_size, int aad, int aad_len, int input, unsigned int input_size, int outString)其中的Key是由之前赋值的，并不是传参进入：key_lenth = *(_DWORD *)(a1 + 8);key = *(_DWORD *)(a1 + 0x60);提交数据aes加密所需key和iv的获取过程：后三部分数据都需要进行aes-gcm加密，他们所需要的key是同样的，实际的IV变化，并不是简单的递增递减，而是与sequence_number进行异或所得，具体关注 libwechatnetwork.so中sub_546F4函数加密时iv变化：           0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F  0123456789ABCDEF00000000  b0 0e 4c 09 b1 d9 d2 6e 28 f6 fc aa              ..L....n(...            // 这里扩展而来的iv = stc_iv           0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F  0123456789ABCDEF00000000  b0 0e 4c 09 b1 d9 d2 6e 28 f6 fc ab              ..L....n(...                       0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F  0123456789ABCDEF00000000  b0 0e 4c 09 b1 d9 d2 6e 28 f6 fc a8              ..L....n(...                       0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F  0123456789ABCDEF00000000  b0 0e 4c 09 b1 d9 d2 6e 28 f6 fc a9              ..L....n(...            解密时iv变化：           0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F  0123456789ABCDEF00000000  0c 94 f6 57 c9 11 d9 ce 18 a4 4d 9a              ...W......M.           // 这里扩展而来的iv = stc_iv            0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F  0123456789ABCDEF00000000  0c 94 f6 57 c9 11 d9 ce 18 a4 4d 9b              ...W......M.                                 0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F  0123456789ABCDEF00000000  0c 94 f6 57 c9 11 d9 ce 18 a4 4d 98              ...W......M.                     0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F  0123456789ABCDEF00000000  0c 94 f6 57 c9 11 d9 ce 18 a4 4d 99              ...W......M.           具体过程如下：
+AES-GCM加密算法有加密和解密两种操作，对应的输入输出分别为：
+加密解密输入Key、IV、明文plaintext、附加验证数据AADKey、IV、密文ciphertext、验证标签T 、附加验证数据AAD输出密文ciphertext、验证标签T明文plaintext对比加解密需要的参数，
+再结合mmtls协议，所以要保证服务端可以解密，客户端的请求中应该包括密文ciphertext、验证标签T 、附加验证数据AAD（K和IV都由服务端根据SS==ES 扩展生成），
+每次短链接的请求数据中有三次aes-gcm加密我们以请求第二部分数据即第一次加密为例：
+000000a0                    19 f1 03 00 24 2f 68 f6 e0 08  .*.O.>....$/h...
+000000b0  01 20 61 0a 41 1f 40 b1 3a ca 7b 4a c9 76 fb b5  . a.A.@.:.{J.v..
+000000c0  28 76 84 12 c5 16 29 7c 97 ee c3 eb 05 a9 01     (v....)|........
+
+这次aes的加密中蓝色部分为密文，绿色部分为验证标签，附加验证数据AAD为红色协议头部分，实际的值应为：
+============================ CRYPTO_gcm128_aad_C91DE: 
+0xaece7400 ,0x994f6d60 ,0xd 
+====Data dump add:0x994f6d60 :
+          0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F  0123456789ABCDEF
+00000000  00 00 00 00 00 00 00 01 19 f1 03 00 24           ............$
+============================ CRYPTO_gcm128_aad_C91DE End=============================
+微信中gcm加密函数分析,微信中key的长度为0x10， iv长度0xc，附加验证数据aad长度0xd：
+官方：virtual int mmtls::AesGcmCrypter::Crypt(const byte* iv, size_t iv_len, const byte* aad, size_t aad_len, const byte* input, size_t input_size, mmtls::String& out)
+实际：signed int __fastcall mmtls::AesGcmCrypter::Crypt_51210(int a1, int nonce, int nonce_size, int aad, int aad_len, int input, unsigned int input_size, int outString)
+其中的Key是由之前赋值的，并不是传参进入：
+key_lenth = *(_DWORD *)(a1 + 8);
+key = *(_DWORD *)(a1 + 0x60);
+提交数据aes加密所需key和iv的获取过程：
+后三部分数据都需要进行aes-gcm加密，他们所需要的key是同样的，实际的IV变化，并不是简单的递增递减，而是与sequence_number进行异或所得，具体关注 libwechatnetwork.so中sub_546F4函数加密时iv变化：
+           0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F  0123456789ABCDEF
+00000000  b0 0e 4c 09 b1 d9 d2 6e 28 f6 fc aa              ..L....n(...            // 这里扩展而来的iv = stc_iv
+           0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F  0123456789ABCDEF
+00000000  b0 0e 4c 09 b1 d9 d2 6e 28 f6 fc ab              ..L....n(...               
+           0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F  0123456789ABCDEF
+00000000  b0 0e 4c 09 b1 d9 d2 6e 28 f6 fc a8              ..L....n(...             
+           0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F  0123456789ABCDEF
+00000000  b0 0e 4c 09 b1 d9 d2 6e 28 f6 fc a9              ..L....n(...            
+解密时iv变化：           
+					 0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F  0123456789ABCDEF
+00000000  0c 94 f6 57 c9 11 d9 ce 18 a4 4d 9a              ...W......M.           // 这里扩展而来的iv = stc_iv       
+           0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F  0123456789ABCDEF
+00000000  0c 94 f6 57 c9 11 d9 ce 18 a4 4d 9b              ...W......M.                        
+           0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F  0123456789ABCDEF
+00000000  0c 94 f6 57 c9 11 d9 ce 18 a4 4d 98              ...W......M.            
+           0  1  2  3  4  5  6  7  8  9  A  B  C  D  E  F  0123456789ABCDEF
+00000000  0c 94 f6 57 c9 11 d9 ce 18 a4 4d 99              ...W......M.           
+
+具体过程如下：
 
 
 ========================= 更新psk后接收数据函数 Start ===========================
@@ -26,8 +67,7 @@ Data dump 接收到的数据:0xaec86680 :
 000000b0  d6 6e dd 3e 8e 69 5e f9 e2 8c 46 81 4a 41 a1 33  .n.>.i^...F.JA.3
 000000c0  9a 77 f5 3d 72 82 18 c4 42 27 f0 bd 43 ff 19 ac  .w.=r...B'..C...
 000000d0  79 9b d1 6e 45 d3 0d 6e 86 e2 ec 4b 8c 29 b0 13  y..nE..n...K.)..
-000000e0  15 21 ed
-                   16 f1 03 01 25 5d 47 b4 91 d7 3b fd ac  .!.....%]G...;..
+000000e0  15 21 ed 16 f1 03 01 25 5d 47 b4 91 d7 3b fd ac  .!.....%]G...;..
 000000f0  03 ac 95 29 0a 61 d2 8c 3c c9 2e e8 84 86 75 94  ...).a..<.....u.
 00000100  9a cc dc bf 49 20 b7 0f 4e c4 2e c6 3f 2e 44 76  ....I ..N...?.Dv
 00000110  4d aa 12 49 c9 90 a7 34 50 0a 23 8f 9f 99 8e 7d  M..I...4P.#....}
@@ -45,8 +85,7 @@ Data dump 接收到的数据:0xaec86680 :
 000001d0  94 1c c2 90 aa c2 10 a4 5b d3 45 ad e9 9b e6 43  ........[.E....C
 000001e0  9a a8 8c d3 93 b8 e8 f3 16 dc 0d 39 de 3a a8 8d  ...........9.:..
 000001f0  5b a9 a7 79 5c 71 ee 86 8f 8a 4c e5 af a7 ee 47  [..y\q....L....G
-00000200  fd 72 b2 fd 29 ea 5c de 52 96 a1 34 79
-                                                 16 f1 03  .r..).\.R..4y...
+00000200  fd 72 b2 fd 29 ea 5c de 52 96 a1 34 79 16 f1 03  .r..).\.R..4y...
 00000210  00 37 58 ea 14 f0 8c e4 b9 f1 b7 b3 4b de 61 c5  .7X.........K.a.
 00000220  af 72 04 8e 06 e3 9e ca 4b 89 54 90 34 d2 0d 9e  .r......K.T.4...
 00000230  b2 ed 46 4e d0 e0 8d 11 b3 1c 1f 80 fe 52 65 13  ..FN.........Re.
@@ -258,7 +297,6 @@ Data dump 输出数据:0xaec77760 :
 
 总结以下：
 对更新psk后，接收的数据，第二、三部分解密
-
 
 
 
